@@ -109,9 +109,10 @@ export default function BetWithTheBoys() {
   }, [groupCode]);
 
   const saveGroup = async (data) => {
-    await supabase
+    const { error } = await supabase
       .from("groups")
-      .upsert({ code: data.code, data: data, updated_at: new Date().toISOString() });
+      .upsert({ code: data.code, data: data, updated_at: new Date().toISOString() }, { onConflict: "code" });
+    if (error) console.error("saveGroup error:", error);
     setGroupData({ ...data });
   };
 
@@ -129,11 +130,12 @@ export default function BetWithTheBoys() {
     setLoading(true);
     const code = joinCode.trim().toUpperCase();
     try {
-      const { data: result } = await supabase
+      const { data: result, error } = await supabase
         .from("groups")
         .select("data")
         .eq("code", code)
-        .single();
+        .maybeSingle();
+      if (error) { console.error("join query error:", error); setError("Something went wrong. Try again."); setLoading(false); return; }
       if (!result) { setError("Group not found. Check the code."); setLoading(false); return; }
       const group = result.data;
       const existing = group.members.find(m => m.name.toLowerCase() === nameInput.trim().toLowerCase());
@@ -141,7 +143,7 @@ export default function BetWithTheBoys() {
       if (!existing) group.members.push({ id: uid, name: nameInput.trim() });
       await saveGroup(group);
       setUserId(uid); setUserName(nameInput.trim()); setGroupCode(code); setGroupData(group); setScreen("group");
-    } catch (e) { setError("Something went wrong. Try again."); }
+    } catch (e) { console.error("handleJoin catch:", e); setError("Something went wrong. Try again."); }
     setLoading(false);
   };
 
