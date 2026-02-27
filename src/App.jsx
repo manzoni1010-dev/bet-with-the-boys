@@ -91,6 +91,21 @@ export default function BetWithTheBoys() {
     return () => document.head.removeChild(link);
   }, []);
 
+  // Restore session from localStorage on first load
+  useEffect(() => {
+    const saved = localStorage.getItem("bwtb_session");
+    if (!saved) return;
+    try {
+      const { userId: uid, userName: uname, groupCode: gcode } = JSON.parse(saved);
+      if (uid && uname && gcode) {
+        setUserId(uid);
+        setUserName(uname);
+        setGroupCode(gcode);
+        setScreen("group");
+      }
+    } catch (e) {}
+  }, []);
+
   useEffect(() => {
     if (!groupCode) return;
     const poll = async () => {
@@ -122,6 +137,7 @@ export default function BetWithTheBoys() {
     const uid = generateId();
     const code = generateCode();
     await saveGroup({ code, name: groupNameInput.trim(), members: [{ id: uid, name: nameInput.trim() }], bets: [], settlements: [], createdAt: Date.now() });
+    localStorage.setItem("bwtb_session", JSON.stringify({ userId: uid, userName: nameInput.trim(), groupCode: code }));
     setUserId(uid); setUserName(nameInput.trim()); setGroupCode(code); setScreen("group"); setLoading(false);
   };
 
@@ -142,6 +158,7 @@ export default function BetWithTheBoys() {
       let uid = existing ? existing.id : generateId();
       if (!existing) group.members.push({ id: uid, name: nameInput.trim() });
       await saveGroup(group);
+      localStorage.setItem("bwtb_session", JSON.stringify({ userId: uid, userName: nameInput.trim(), groupCode: code }));
       setUserId(uid); setUserName(nameInput.trim()); setGroupCode(code); setGroupData(group); setScreen("group");
     } catch (e) { console.error("handleJoin catch:", e); setError("Something went wrong. Try again."); }
     setLoading(false);
@@ -684,6 +701,9 @@ export default function BetWithTheBoys() {
                 <button onClick={() => setShowSwitchUser(false)} style={{ background: "none", border: "none", color: COLORS.muted, cursor: "pointer", fontSize: 22 }}>×</button>
               </div>
               <p style={{ color: COLORS.muted, fontSize: 13, margin: "0 0 20px" }}>Testing mode — swap between group members to simulate multiple users.</p>
+              <button onClick={() => { localStorage.removeItem("bwtb_session"); setScreen("landing"); setGroupCode(""); setUserId(""); setUserName(""); setGroupData(null); setShowSwitchUser(false); }} style={{ background: "none", border: `1px solid ${COLORS.red}44`, borderRadius: 8, padding: "8px 14px", cursor: "pointer", color: COLORS.red, fontSize: 12, fontFamily: "'DM Sans', sans-serif", fontWeight: 600, marginBottom: 16 }}>
+                ← Leave Group
+              </button>
               <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                 {groupData?.members.map(member => (
                   <button key={member.id} onClick={() => switchUser(member)} style={{ background: member.id === userId ? COLORS.accentDim : "#ffffff06", border: `1px solid ${member.id === userId ? COLORS.accent + "55" : COLORS.border}`, borderRadius: 12, padding: "14px 16px", cursor: "pointer", display: "flex", justifyContent: "space-between", alignItems: "center", fontFamily: "'DM Sans', sans-serif" }}>
