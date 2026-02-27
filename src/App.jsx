@@ -1,4 +1,9 @@
 import { useState, useEffect } from "react";
+import { createClient } from "@supabase/supabase-js";
+
+const SUPABASE_URL = "https://xirjxhwvkeugwjigvfvw.supabase.co";
+const SUPABASE_KEY = "sb_publishable_smv4fYOzC2mj9U0JfHpbmw_JnFGvUn_";
+const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
 const generateCode = () => Math.random().toString(36).substring(2, 8).toUpperCase();
 const generateId = () => Math.random().toString(36).substring(2, 14);
@@ -90,8 +95,12 @@ export default function BetWithTheBoys() {
     if (!groupCode) return;
     const poll = async () => {
       try {
-        const result = await window.storage.get(`group:${groupCode}`, true);
-        if (result) setGroupData(JSON.parse(result.value));
+        const { data } = await supabase
+          .from("groups")
+          .select("data")
+          .eq("code", groupCode)
+          .single();
+        if (data) setGroupData(data.data);
       } catch (e) {}
     };
     poll();
@@ -100,7 +109,9 @@ export default function BetWithTheBoys() {
   }, [groupCode]);
 
   const saveGroup = async (data) => {
-    await window.storage.set(`group:${data.code}`, JSON.stringify(data), true);
+    await supabase
+      .from("groups")
+      .upsert({ code: data.code, data: data, updated_at: new Date().toISOString() });
     setGroupData({ ...data });
   };
 
@@ -118,9 +129,13 @@ export default function BetWithTheBoys() {
     setLoading(true);
     const code = joinCode.trim().toUpperCase();
     try {
-      const result = await window.storage.get(`group:${code}`, true);
+      const { data: result } = await supabase
+        .from("groups")
+        .select("data")
+        .eq("code", code)
+        .single();
       if (!result) { setError("Group not found. Check the code."); setLoading(false); return; }
-      const group = JSON.parse(result.value);
+      const group = result.data;
       const existing = group.members.find(m => m.name.toLowerCase() === nameInput.trim().toLowerCase());
       let uid = existing ? existing.id : generateId();
       if (!existing) group.members.push({ id: uid, name: nameInput.trim() });
