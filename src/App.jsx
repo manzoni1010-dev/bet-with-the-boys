@@ -82,6 +82,8 @@ export default function BetWithTheBoys() {
   // Confirmation modal state
   const [pendingResult, setPendingResult] = useState(null); // { betId, result }
   const [showLeaderboard, setShowLeaderboard] = useState(false);
+  const [betExpiryDate, setBetExpiryDate] = useState("");
+  const [betExpiryTime, setBetExpiryTime] = useState("");
 
   useEffect(() => {
     const link = document.createElement("link");
@@ -115,7 +117,16 @@ export default function BetWithTheBoys() {
           .select("data")
           .eq("code", groupCode)
           .single();
-        if (data) setGroupData(data.data);
+        if (!data) return;
+        let group = data.data;
+        // Auto-remove expired open bets
+        const now = Date.now();
+        const hasExpired = group.bets.some(b => b.status === "open" && b.expiresAt && b.expiresAt <= now);
+        if (hasExpired) {
+          group = { ...group, bets: group.bets.filter(b => !(b.status === "open" && b.expiresAt && b.expiresAt <= now)) };
+          await supabase.from("groups").upsert({ code: group.code, data: group, updated_at: new Date().toISOString() }, { onConflict: "code" });
+        }
+        setGroupData(group);
       } catch (e) {}
     };
     poll();
@@ -168,15 +179,18 @@ export default function BetWithTheBoys() {
     if (!betDesc.trim()) return;
     const amount = parseFloat(betAmount);
     if (!amount || amount <= 0) return;
+    if (!betExpiryDate || !betExpiryTime) return;
+    const expiresAt = new Date(`${betExpiryDate}T${betExpiryTime}`).getTime();
+    if (isNaN(expiresAt) || expiresAt <= Date.now()) return;
     const newBet = {
       id: generateId(), description: betDesc.trim(), amount,
       offererId: userId, offererName: userName,
       acceptorId: null, acceptorName: null,
       status: "open", offererResult: null, acceptorResult: null,
-      createdAt: Date.now(),
+      expiresAt, createdAt: Date.now(),
     };
     await saveGroup({ ...groupData, bets: [newBet, ...groupData.bets] });
-    setBetDesc(""); setBetAmount(""); setShowOfferModal(false);
+    setBetDesc(""); setBetAmount(""); setBetExpiryDate(""); setBetExpiryTime(""); setShowOfferModal(false);
   };
 
   const handleAccept = async (betId) => {
@@ -297,7 +311,7 @@ export default function BetWithTheBoys() {
   const copyCode = () => { navigator.clipboard.writeText(groupCode).then(() => { setCopiedCode(true); setTimeout(() => setCopiedCode(false), 2000); }); };
 
   const myBets = groupData?.bets.filter(b => b.status === "active" && (b.offererId === userId || b.acceptorId === userId)) || [];
-  const openBets = groupData?.bets.filter(b => b.status === "open") || [];
+  const openBets = groupData?.bets.filter(b => b.status === "open" && (!b.expiresAt || b.expiresAt > Date.now())) || [];
   const historyBets = groupData?.bets.filter(b => b.status === "history" && (b.offererId === userId || b.acceptorId === userId)).sort((a, b) => b.createdAt - a.createdAt) || [];
   const disputedBets = groupData?.bets.filter(b => b.status === "disputed" && (b.offererId === userId || b.acceptorId === userId)) || [];
   const netBalances = getNetBalances();
@@ -525,7 +539,12 @@ export default function BetWithTheBoys() {
             <div>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
                 <p style={{ margin: 0, fontSize: 13, color: COLORS.mutedLight }}>{openBets.length} bet{openBets.length !== 1 ? "s" : ""} on the board</p>
-                <button style={styles.btn("primary")} onClick={() => setShowOfferModal(true)}>+ Offer Bet</button>
+                <button style={styles.btn("primary")} onClick={() => {
+                  const todayStr = new Date().toISOString().split("T")[0];
+                  setBetExpiryDate(todayStr);
+                  setBetExpiryTime("");
+                  setShowOfferModal(true);
+                }}>+ Offer Bet</button>
               </div>
               {openBets.length === 0
                 ? <div style={{ textAlign: "center", padding: "48px 24px", color: COLORS.muted }}><div style={{ fontSize: 40, marginBottom: 12 }}>🎲</div><p style={{ margin: 0, fontSize: 15 }}>No bets on the board yet.</p><p style={{ margin: "6px 0 0", fontSize: 13 }}>Be the first to offer one.</p></div>
@@ -732,28 +751,56 @@ export default function BetWithTheBoys() {
         )}
 
         {/* ── OFFER BET MODAL ── */}
-        {showOfferModal && (
-          <div style={{ position: "fixed", inset: 0, background: "#000000bb", zIndex: 200, display: "flex", alignItems: "flex-end", justifyContent: "center" }} onClick={e => { if (e.target === e.currentTarget) setShowOfferModal(false); }}>
-            <div style={{ background: "#111825", borderRadius: "20px 20px 0 0", border: `1px solid ${COLORS.border}`, borderBottom: "none", padding: 24, width: "100%", maxWidth: 480, animation: "slideUp 0.25s ease" }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 24 }}>
-                <h3 style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 26, letterSpacing: 1, margin: 0 }}>Offer a Bet</h3>
-                <button onClick={() => setShowOfferModal(false)} style={{ background: "none", border: "none", color: COLORS.muted, cursor: "pointer", fontSize: 22 }}>×</button>
-              </div>
-              <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-                <div>
-                  <label style={styles.label}>Bet Description (The Bet YOU Want)</label>
-                  <input style={styles.input} placeholder="e.g. Chiefs -3 vs Bills" value={betDesc} onChange={e => setBetDesc(e.target.value)} autoFocus />
-                  <p style={{ margin: "6px 0 0", fontSize: 12, color: COLORS.muted }}>Describe the position you're offering. Someone else will take the other side.</p>
+        {showOfferModal && (() => {
+          const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+          const tzShort = new Date().toLocaleTimeString("en-US", { timeZoneName: "short" }).split(" ").pop();
+          const todayStr = new Date().toISOString().split("T")[0];
+          const isFormValid = betDesc.trim() && betAmount && betExpiryDate && betExpiryTime &&
+            new Date(`${betExpiryDate}T${betExpiryTime}`).getTime() > Date.now();
+          return (
+            <div style={{ position: "fixed", inset: 0, background: "#000000bb", zIndex: 200, display: "flex", alignItems: "flex-end", justifyContent: "center" }} onClick={e => { if (e.target === e.currentTarget) setShowOfferModal(false); }}>
+              <div style={{ background: "#111825", borderRadius: "20px 20px 0 0", border: `1px solid ${COLORS.border}`, borderBottom: "none", padding: 24, width: "100%", maxWidth: 480, animation: "slideUp 0.25s ease" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 24 }}>
+                  <h3 style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 26, letterSpacing: 1, margin: 0 }}>Offer a Bet</h3>
+                  <button onClick={() => setShowOfferModal(false)} style={{ background: "none", border: "none", color: COLORS.muted, cursor: "pointer", fontSize: 22 }}>×</button>
                 </div>
-                <div>
-                  <label style={styles.label}>Amount ($)</label>
-                  <input style={styles.input} type="number" min="1" step="0.50" placeholder="e.g. 20" value={betAmount} onChange={e => setBetAmount(e.target.value)} />
+                <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+                  <div>
+                    <label style={styles.label}>Bet Description (The Bet YOU Want)</label>
+                    <input style={styles.input} placeholder="e.g. Chiefs -3 vs Bills" value={betDesc} onChange={e => setBetDesc(e.target.value)} autoFocus />
+                    <p style={{ margin: "6px 0 0", fontSize: 12, color: COLORS.muted }}>Describe the position you're offering. Someone else will take the other side.</p>
+                  </div>
+                  <div>
+                    <label style={styles.label}>Amount ($)</label>
+                    <input style={styles.input} type="number" min="1" step="0.50" placeholder="e.g. 20" value={betAmount} onChange={e => setBetAmount(e.target.value)} />
+                  </div>
+                  <div>
+                    <label style={styles.label}>Offer Expires</label>
+                    <div style={{ display: "flex", gap: 8 }}>
+                      <input
+                        style={{ ...styles.input, flex: 1 }}
+                        type="date"
+                        min={todayStr}
+                        value={betExpiryDate}
+                        onChange={e => setBetExpiryDate(e.target.value)}
+                      />
+                      <input
+                        style={{ ...styles.input, flex: 1 }}
+                        type="time"
+                        value={betExpiryTime}
+                        onChange={e => setBetExpiryTime(e.target.value)}
+                      />
+                    </div>
+                    <p style={{ margin: "6px 0 0", fontSize: 12, color: COLORS.muted }}>
+                      Times are in your local timezone: <strong style={{ color: COLORS.mutedLight }}>{tzShort} ({tz})</strong>. The offer will disappear automatically at this time if no one has accepted.
+                    </p>
+                  </div>
+                  <button style={{ ...styles.btn("primary"), width: "100%", fontSize: 16, padding: "14px", opacity: isFormValid ? 1 : 0.5 }} onClick={handleOfferBet} disabled={!isFormValid}>Post to Board</button>
                 </div>
-                <button style={{ ...styles.btn("primary"), width: "100%", fontSize: 16, padding: "14px" }} onClick={handleOfferBet} disabled={!betDesc.trim() || !betAmount}>Post to Board</button>
               </div>
             </div>
-          </div>
-        )}
+          );
+        })()}
 
       </div>
     </div>
